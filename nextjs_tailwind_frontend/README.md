@@ -11,9 +11,27 @@ This project provides a minimal React template with a clean, modern UI and minim
 
 ## Getting Started
 
+### Backend configuration (Gallery)
+
+The Gallery loads images from the backend public endpoint:
+
+- `GET /api/gallery`
+
+Configure the backend base URL via an environment variable:
+
+- `REACT_APP_BACKEND_API_BASE_URL` (example: `https://your-backend.example.com`)
+
+If `REACT_APP_BACKEND_API_BASE_URL` is **not** set, the app uses a preview/dev default of:
+
+- `http://localhost:8080`
+
+> Note: After changing `REACT_APP_BACKEND_API_BASE_URL`, restart the frontend dev server (`npm start`) so Create React App picks up the new env var.
+
+### Running locally
+
 In the project directory, you can run:
 
-### `npm start`
+#### `npm start`
 
 Runs the app in development mode.\
 Open [http://localhost:3000](http://localhost:3000) to view it in your browser.

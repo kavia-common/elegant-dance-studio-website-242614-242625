@@ -3,24 +3,29 @@ import "./App.css";
 
 /**
  * Frontend configuration.
- * IMPORTANT: Set REACT_APP_BACKEND_API_BASE_URL in the frontend container environment.
- * Example: REACT_APP_BACKEND_API_BASE_URL=https://your-backend.example.com
+ *
+ * REACT_APP_BACKEND_API_BASE_URL:
+ * - The origin (and optional base path) where the backend is reachable from the browser.
+ * - Example: https://your-backend.example.com
+ *
+ * Preview/Dev default:
+ * - If not set, we default to http://localhost:8080 to make local preview work out-of-the-box.
+ * - In hosted environments you should set REACT_APP_BACKEND_API_BASE_URL explicitly.
  */
-const API_BASE_URL = (process.env.REACT_APP_BACKEND_API_BASE_URL || "").replace(
-  /\/$/,
-  ""
-);
+const API_BASE_URL = (
+  process.env.REACT_APP_BACKEND_API_BASE_URL || "http://localhost:8080"
+).replace(/\/$/, "");
 
 /**
- * Best-effort guess for a public gallery endpoint.
- * Since the backend API spec isn't available in this task, we attempt a small set of common endpoints.
+ * Public gallery endpoint.
+ *
+ * The backend container (nextjs_backend_admin) exposes:
+ *   GET /api/gallery
+ *
+ * Response shape: JSON array of GalleryImage objects:
+ *   [{ id, image_url, alt_text, created_at, ... }, ...]
  */
-const GALLERY_ENDPOINT_CANDIDATES = [
-  "/api/gallery/images",
-  "/api/gallery",
-  "/api/images",
-  "/gallery/images",
-];
+const PUBLIC_GALLERY_PATH = "/api/gallery";
 
 const navItems = [
   { id: "home", label: "Home" },
@@ -44,10 +49,13 @@ function App() {
     resolvedEndpoint: null,
   });
 
-  const canCallApi = useMemo(() => {
-    // Avoid calling relative URLs unintentionally; require explicit base URL.
-    return Boolean(API_BASE_URL);
-  }, []);
+  const configuredBaseUrl = (process.env.REACT_APP_BACKEND_API_BASE_URL || "")
+    .trim()
+    .replace(/\/$/, "");
+
+  const isUsingDefaultBaseUrl = !configuredBaseUrl;
+
+  const resolvedBaseUrl = useMemo(() => API_BASE_URL, []);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -56,97 +64,85 @@ function App() {
   useEffect(() => {
     let cancelled = false;
 
-    async function tryFetchJson(url) {
+    async function fetchJsonOrThrow(url) {
       const res = await fetch(url, {
         method: "GET",
         headers: { Accept: "application/json" },
       });
+
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         throw new Error(
           `HTTP ${res.status} ${res.statusText}${text ? ` - ${text}` : ""}`
         );
       }
+
       return res.json();
     }
 
     async function loadGallery() {
-      if (!canCallApi) {
-        setGallery({
-          status: "error",
-          images: [],
-          error:
-            "Gallery backend is not configured. Set REACT_APP_BACKEND_API_BASE_URL.",
-          resolvedEndpoint: null,
-        });
-        return;
-      }
-
       setGallery((prev) => ({
         ...prev,
         status: "loading",
         error: null,
+        resolvedEndpoint: null,
       }));
 
-      let lastError = null;
+      const url = `${resolvedBaseUrl}${PUBLIC_GALLERY_PATH}`;
 
-      for (const candidate of GALLERY_ENDPOINT_CANDIDATES) {
-        const url = `${API_BASE_URL}${candidate}`;
-        try {
-          const data = await tryFetchJson(url);
+      try {
+        const data = await fetchJsonOrThrow(url);
 
-          // We accept either:
-          // 1) { images: [...] }
-          // 2) [...] directly
-          const imagesRaw = Array.isArray(data) ? data : data?.images;
+        // Backend returns a JSON array of GalleryImage objects.
+        const imagesRaw = Array.isArray(data) ? data : data?.images;
 
-          if (!Array.isArray(imagesRaw)) {
-            throw new Error(
-              "Unexpected response shape (expected an array or { images: [...] })."
-            );
-          }
-
-          const normalized = imagesRaw
-            .map((img, idx) => {
-              const image_url =
-                img?.image_url || img?.url || img?.src || img?.publicUrl;
-              const alt_text = img?.alt_text || img?.alt || "Dance studio photo";
-              const id = img?.id ?? `${candidate}:${idx}`;
-
-              if (!image_url) return null;
-
-              return {
-                id: String(id),
-                image_url: String(image_url),
-                alt_text: String(alt_text),
-              };
-            })
-            .filter(Boolean);
-
-          if (cancelled) return;
-
-          setGallery({
-            status: "loaded",
-            images: normalized,
-            error: null,
-            resolvedEndpoint: url,
-          });
-          return;
-        } catch (e) {
-          lastError = e;
+        if (!Array.isArray(imagesRaw)) {
+          throw new Error(
+            "Unexpected response shape (expected an array of images)."
+          );
         }
+
+        const normalized = imagesRaw
+          .map((img, idx) => {
+            const image_url =
+              img?.image_url || img?.url || img?.src || img?.publicUrl;
+            const alt_text = img?.alt_text || img?.alt || "Dance studio photo";
+            const id = img?.id ?? `${PUBLIC_GALLERY_PATH}:${idx}`;
+
+            if (!image_url) return null;
+
+            return {
+              id: String(id),
+              image_url: String(image_url),
+              alt_text: String(alt_text),
+            };
+          })
+          .filter(Boolean);
+
+        if (cancelled) return;
+
+        setGallery({
+          status: "loaded",
+          images: normalized,
+          error: null,
+          resolvedEndpoint: url,
+        });
+      } catch (e) {
+        if (cancelled) return;
+
+        const baseUrlHelp = isUsingDefaultBaseUrl
+          ? `This app is currently using the default preview backend URL (${resolvedBaseUrl}). If your backend runs elsewhere, set REACT_APP_BACKEND_API_BASE_URL and restart the frontend.`
+          : `Verify REACT_APP_BACKEND_API_BASE_URL is correct and that the backend exposes GET ${PUBLIC_GALLERY_PATH}.`;
+
+        setGallery({
+          status: "error",
+          images: [],
+          error: `Unable to load gallery images from ${url}. ${
+            e?.message || "Unknown error"
+          }\n\n${baseUrlHelp}`,
+          resolvedEndpoint: url,
+        });
       }
-
-      if (cancelled) return;
-
-      setGallery({
-        status: "error",
-        images: [],
-        error: `Unable to load gallery images from backend. Last error: ${
-          lastError?.message || "Unknown error"
-        }`,
-        resolvedEndpoint: null,
-      });
     }
 
     loadGallery();
@@ -154,7 +150,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [canCallApi]);
+  }, [isUsingDefaultBaseUrl, resolvedBaseUrl]);
 
   // PUBLIC_INTERFACE
   const toggleTheme = () => setTheme((t) => (t === "light" ? "dark" : "light"));
@@ -466,10 +462,15 @@ function App() {
               </div>
             </div>
 
-            {!canCallApi ? (
+            {isUsingDefaultBaseUrl ? (
               <div className="notice notice-warn" role="alert">
-                <strong>Gallery not configured.</strong> Set{" "}
-                <code>REACT_APP_BACKEND_API_BASE_URL</code> to enable live images.
+                <strong>Gallery backend not configured.</strong>{" "}
+                <span>
+                  Using preview default{" "}
+                  <code>{resolvedBaseUrl}</code>. To use your deployed backend,
+                  set <code>REACT_APP_BACKEND_API_BASE_URL</code> (and restart the
+                  frontend).
+                </span>
               </div>
             ) : null}
 
@@ -484,10 +485,11 @@ function App() {
             {gallery.status === "error" ? (
               <div className="notice notice-error" role="alert">
                 <strong>Couldn’t load gallery.</strong>
-                <div className="notice-text">{gallery.error}</div>
+                <div className="notice-text" style={{ whiteSpace: "pre-wrap" }}>
+                  {gallery.error}
+                </div>
                 <div className="notice-text">
-                  Expected backend endpoints (tried):{" "}
-                  <code>{GALLERY_ENDPOINT_CANDIDATES.join(", ")}</code>
+                  Expected backend endpoint: <code>{PUBLIC_GALLERY_PATH}</code>
                 </div>
               </div>
             ) : null}
